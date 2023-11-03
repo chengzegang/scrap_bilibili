@@ -21,7 +21,9 @@ def auth_flow() -> dropbox.Dropbox:
         )
         return dbx
     auth_flow = dropbox.DropboxOAuth2FlowNoRedirect(
-        os.environ["DBX_APP_KEY"], os.environ["DBX_APP_SECRET"], token_access_type="legacy"
+        os.environ["DBX_APP_KEY"],
+        os.environ["DBX_APP_SECRET"],
+        token_access_type="legacy",
     )
     authorize_url = auth_flow.start()
     sys.stdout.write("1. Go to: {}\n".format(authorize_url))
@@ -51,7 +53,7 @@ def auth_flow() -> dropbox.Dropbox:
 def upload_file(
     dbx: dropbox.Dropbox, local_path: str, remote_path: str, pbar: tqdm = None
 ):
-    #dbx.check_and_refresh_access_token()
+    # dbx.check_and_refresh_access_token()
     dbx.files_upload(
         open(local_path, "rb").read(),
         remote_path,
@@ -81,7 +83,7 @@ def upload_file2(
     chunk_size: int = 4 * 1024 * 1024,
     pbar: tqdm = None,
 ):
-    #dbx.check_and_refresh_access_token()
+    # dbx.check_and_refresh_access_token()
     with open(local_path, "rb") as f:
         filesize = os.path.getsize(local_path)
         chunk_size = min(chunk_size, filesize)
@@ -116,7 +118,7 @@ def upload_all(
     downloaded_path: str,
     num_threads=16,
 ):
-    #dbx.check_and_refresh_access_token()
+    # dbx.check_and_refresh_access_token()
     downloaded = set(open(downloaded_path, "r").read().splitlines())
     existed = set(
         os.path.splitext(os.path.basename(f))[0] for f in list_exists(dbx, remote_root)
@@ -148,6 +150,9 @@ def upload_all(
 
         executor.shutdown(wait=True)
         pbar.close()
+    os.remove(downloaded_path)
+    with open(downloaded_path, "w") as f:
+        f.write("\n".join(existed))
 
 
 def download(dbx: dropbox.Dropbox, local_path: str, remote_path: str):
