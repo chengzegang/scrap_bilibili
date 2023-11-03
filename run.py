@@ -50,9 +50,9 @@ def pipeline(
             f.write(ret)
             f.write("\n")
             fcntl.flock(f, fcntl.LOCK_UN)
-        upload_file2(
-            dbx, zip_filepath, os.path.join(remote_root, os.path.basename(zip_filepath))
-        )
+        # upload_file2(
+        #    dbx, zip_filepath, os.path.join(remote_root, os.path.basename(zip_filepath))
+        # )
         remove_along_till_root(cache_dir, video_path)
         shutil.rmtree(frame_dir)
     if pbar is not None:
@@ -69,7 +69,7 @@ def main(
     data_dir: str = "data/frames",
     image_size: int = 512,
     verbose: bool = True,
-    num_threads: int = 1,
+    num_threads: int = 16,
 ):
     clean(
         cache_dir,

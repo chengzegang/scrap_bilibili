@@ -50,6 +50,15 @@ def auth_flow() -> dropbox.Dropbox:
     return dbx
 
 
+def download_file(
+    dbx: dropbox.Dropbox, local_path: str, remote_path: str, pbar: tqdm = None
+):
+    dbx.files_download_to_file(local_path, remote_path)
+    if pbar is not None:
+        pbar.update()
+        pbar.set_description(f"Downloaded: {os.path.basename(local_path)}")
+
+
 def upload_file(
     dbx: dropbox.Dropbox, local_path: str, remote_path: str, pbar: tqdm = None
 ):
