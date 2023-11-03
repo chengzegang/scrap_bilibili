@@ -12,6 +12,7 @@ from tqdm import tqdm
 import fcntl
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 import multiprocessing as mp
+from upload import auth_flow, upload_file, upload_all
 
 
 def load_total_bvids(db_path: str):
@@ -21,9 +22,7 @@ def load_total_bvids(db_path: str):
 
 
 def load_downloaded_bvids(downloaded_path: str):
-    with open(downloaded_path) as f:
-        bvs = f.readlines()
-    bvs = [bv.strip() for bv in bvs]
+    bvs = open(downloaded_path, "r").read().splitlines()
     return bvs
 
 
@@ -41,13 +40,6 @@ def download(bv: str, dst_dir: str, bbdown_bin: str):
         return bv
 
 
-def video_to_frames(video_path: str, frame_root: str):
-    video_name = os.path.basename(video_path).split(".")[0]
-    dst_dir = os.path.join(frame_root, video_name)
-    os.makedirs(dst_dir, exist_ok=True)
-    cap = cv2.VideoCapture(video_path)
-
-
 def count_total_frames(path: str, yield_freq: float = 0.25):
     vidcap = cv2.VideoCapture(path)
     fps = int(vidcap.get(cv2.CAP_PROP_FPS))
@@ -55,6 +47,30 @@ def count_total_frames(path: str, yield_freq: float = 0.25):
     interval = max(1, fps / yield_freq)
     total_frames = int(org_total_frames / interval)
     return total_frames
+
+
+def zipdir(root: str, dst_dir: str):
+    name = os.path.basename(root)
+    dst_zip_path = os.path.join(dst_dir, name + ".zip")
+    with zipfile.ZipFile(dst_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for src_name in os.listdir(root):
+            src_file = os.path.join(root, src_name)
+            zf.write(src_file, src_name)
+    return dst_zip_path
+
+
+def remove_along_till_root(root: str, path: str):
+    assert os.path.commonprefix([root, path]) == root
+    while path != root:
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+            else:
+                os.rmdir(path)
+        except Exception as e:
+            print(f"Exception from remove {path}: {e}")
+        path = os.path.dirname(path)
+
 
 
 def center_crop(image):
@@ -72,7 +88,6 @@ def center_crop(image):
 def frames(path: str, yield_freq: float = 0.25, image_size: int = 512):
     vidcap = cv2.VideoCapture(path)
     fps = int(vidcap.get(cv2.CAP_PROP_FPS))
-    total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
     interval = int(fps / yield_freq)
     count = 0
     while True:
@@ -101,15 +116,6 @@ def video2frames(path: str, dst_dir: str, image_size: int = 512, verbose: bool =
         pbar.update()
 
 
-def zipdir(root: str, dst_dir: str):
-    name = os.path.basename(root)
-    dst_zip_path = os.path.join(dst_dir, name + ".zip")
-    with zipfile.ZipFile(dst_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for src_name in os.listdir(root):
-            src_file = os.path.join(root, src_name)
-            zf.write(src_file, src_name)
-    return dst_zip_path
-
 
 def remove_along_till_root(root: str, path: str):
     assert os.path.commonprefix([root, path]) == root
@@ -123,74 +129,3 @@ def remove_along_till_root(root: str, path: str):
             print(f"Exception from remove {path}: {e}")
         path = os.path.dirname(path)
 
-
-def pipeline(
-    bv: str,
-    downloaded_path: str = "downloaded.txt",
-    bbdown_bin: str = "bin/BBDown",
-    cache_dir: str = "data/videos",
-    data_dir: str = "data/frames",
-    image_size: int = 512,
-    pbar: tqdm = None,
-):
-    ret = download(bv, cache_dir, bbdown_bin)
-    if ret is not None:
-        video_path = (
-            glob.glob(os.path.join(cache_dir, f"{bv}.mp4"))
-            + glob.glob(os.path.join(cache_dir, "**", f"{bv}.mp4"), recursive=True)
-        )[0]
-        frame_dir = os.path.join(data_dir, f"{bv}")
-        os.makedirs(frame_dir, exist_ok=True)
-        video2frames(  # remove the directory
-            video_path,
-            frame_dir,
-            image_size,
-            False,
-        )
-        with open(downloaded_path, "a+") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            f.write(ret)
-            f.write("\n")
-            fcntl.flock(f, fcntl.LOCK_UN)
-        zipdir(frame_dir, data_dir)
-        remove_along_till_root(cache_dir, video_path)
-        shutil.rmtree(frame_dir)
-    if pbar is not None:
-        pbar.update()
-
-
-def main(
-    db_path: str = "bilibili.db",
-    downloaded_path: str = "downloaded.txt",
-    bbdown_bin: str = "bin/BBDown",
-    cache_dir: str = "data/videos",
-    data_dir: str = "data/frames",
-    image_size: int = 512,
-    verbose: bool = True,
-):
-    os.makedirs(cache_dir, exist_ok=True)
-    os.makedirs(data_dir, exist_ok=True)
-    bvs = load_total_bvids(db_path)
-    downloaded_bvs = load_downloaded_bvids(downloaded_path)
-    bvs = set(bvs) - set(downloaded_bvs)
-    pbar = tqdm(total=len(bvs), disable=not verbose)
-    with ThreadPoolExecutor(os.cpu_count()) as pool:
-        pool.map(
-            partial(
-                pipeline,
-                downloaded_path=downloaded_path,
-                bbdown_bin=bbdown_bin,
-                cache_dir=cache_dir,
-                data_dir=data_dir,
-                image_size=image_size,
-                pbar=pbar,
-            ),
-            bvs,
-        )
-        pool.shutdown(wait=True)
-    pbar.close()
-
-
-if __name__ == "__main__":
-    mp.set_start_method("fork")
-    main()

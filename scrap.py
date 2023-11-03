@@ -135,7 +135,7 @@ def random_walk_scrap(num_walks: int = 5000):
         curr_url = pool.pop()
 
 
-def scrap(num_walks: int):
+def scrap(num_walks: int = 5000):
     urls = [
         "https://www.bilibili.com/v/popular/history",
         "https://www.bilibili.com/v/popular/rank/all",
