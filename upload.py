@@ -153,6 +153,7 @@ def upload_all(
     os.remove(downloaded_path)
     with open(downloaded_path, "w") as f:
         f.write("\n".join(existed))
+        f.write("\n")
 
 
 def download(dbx: dropbox.Dropbox, local_path: str, remote_path: str):
