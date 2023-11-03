@@ -11,9 +11,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 dotenv.load_dotenv()
 
 
-def auth_flow():
+def auth_flow() -> dropbox.Dropbox:
     if "DBX_ACCESS_TOKEN" in os.environ:
-        return True
+        dbx = dropbox.Dropbox(
+            oauth2_refresh_token=os.environ["DBX_REFRESH_TOKEN"],
+            oauth2_access_token=os.environ["DBX_ACCESS_TOKEN"],
+            app_key=os.environ["DBX_APP_KEY"],
+            app_secret=os.environ["DBX_APP_SECRET"],
+        )
+        return dbx
     auth_flow = dropbox.DropboxOAuth2FlowNoRedirect(
         os.environ["DBX_APP_KEY"], os.environ["DBX_APP_SECRET"]
     )
@@ -30,18 +36,20 @@ def auth_flow():
             f.write(
                 f"DBX_ACCESS_TOKEN={oauth_result.access_token}\nDBX_REFRESH_TOKEN={oauth_result.refresh_token}"
             )
-        return True
     except Exception as e:
         raise Exception("Error: {}".format(e))
-
-
-def upload_file(local_path: str, remote_path: str, pbar: tqdm = None):
     dbx = dropbox.Dropbox(
         oauth2_refresh_token=os.environ["DBX_REFRESH_TOKEN"],
         oauth2_access_token=os.environ["DBX_ACCESS_TOKEN"],
         app_key=os.environ["DBX_APP_KEY"],
         app_secret=os.environ["DBX_APP_SECRET"],
     )
+    return dbx
+
+
+def upload_file(
+    dbx: dropbox.Dropbox, local_path: str, remote_path: str, pbar: tqdm = None
+):
     dbx.files_upload(
         open(local_path, "rb").read(),
         remote_path,
@@ -52,13 +60,7 @@ def upload_file(local_path: str, remote_path: str, pbar: tqdm = None):
         pbar.set_description(f"Uploaded: {os.path.basename(local_path)}")
 
 
-def list_exists(remote_root: str, extension: str = ".zip"):
-    dbx = dropbox.Dropbox(
-        oauth2_refresh_token=os.environ["DBX_REFRESH_TOKEN"],
-        oauth2_access_token=os.environ["DBX_ACCESS_TOKEN"],
-        app_key=os.environ["DBX_APP_KEY"],
-        app_secret=os.environ["DBX_APP_SECRET"],
-    )
+def list_exists(dbx: dropbox.Dropbox, remote_root: str, extension: str = ".zip"):
     filenames = []
     resp = dbx.files_list_folder(remote_root)
     while True:
@@ -70,10 +72,49 @@ def list_exists(remote_root: str, extension: str = ".zip"):
     return filenames
 
 
-def upload_all(local_root: str, remote_root: str, downloaded_path: str, num_threads=64):
+def upload_file2(
+    dbx: dropbox.Dropbox,
+    local_path: str,
+    remote_path: str,
+    chunk_size: int = 4 * 1024 * 1024,
+    pbar: tqdm = None,
+):
+    with open(local_path, "rb") as f:
+        filesize = os.path.getsize(local_path)
+        chunk_size = min(chunk_size, filesize)
+        upload_session_start_result = dbx.files_upload_session_start(f.read(chunk_size))
+        cursor = dropbox.files.UploadSessionCursor(
+            session_id=upload_session_start_result.session_id,
+            offset=f.tell(),
+        )
+        commit = dropbox.files.CommitInfo(path=remote_path)
+        while f.tell() < filesize:
+            if (filesize - f.tell()) <= chunk_size:
+                res = dbx.files_upload_session_finish(
+                    f.read(chunk_size), cursor, commit
+                )
+                print(f"Uploaded {os.path.basename(local_path)}")
+            else:
+                dbx.files_upload_session_append(
+                    f.read(chunk_size), cursor.session_id, cursor.offset
+                )
+                cursor.offset = f.tell()
+
+        if pbar is not None:
+            pbar.update()
+            pbar.set_description(f"Uploaded: {os.path.basename(local_path)}")
+    return True
+
+def upload_all(
+    dbx: dropbox.Dropbox,
+    local_root: str,
+    remote_root: str,
+    downloaded_path: str,
+    num_threads=16,
+):
     downloaded = set(open(downloaded_path, "r").read().splitlines())
     existed = set(
-        os.path.splitext(os.path.basename(f))[0] for f in list_exists(remote_root)
+        os.path.splitext(os.path.basename(f))[0] for f in list_exists(dbx, remote_root)
     )
     with ThreadPoolExecutor(num_threads) as executor:
         files = os.listdir(local_root)
@@ -85,41 +126,37 @@ def upload_all(local_root: str, remote_root: str, downloaded_path: str, num_thre
                 if fname not in downloaded or fname in existed:
                     pbar.set_description(f"{f} exists.")
                     pbar.update()
-                    continue
-                local_path = os.path.join(local_root, f)
-                remote_path = os.path.join(remote_root, f)
-                futures.append(
-                    executor.submit(upload_file, local_path, remote_path, pbar)
-                )
+                else:
+                    local_path = os.path.join(local_root, f)
+                    remote_path = os.path.join(remote_root, f)
+                    futures.append(
+                        executor.submit(
+                            upload_file2, dbx, local_path, remote_path, pbar
+                        )
+                    )
+            else:
+                pbar.set_description(f"{f} not a zip file.")
+            pbar.update()
         for f in as_completed(futures):
             if f.exception() is not None:
                 print(f.exception())
-                
+
         executor.shutdown(wait=True)
         pbar.close()
-    # upload_file(downloaded_path, os.path.join(remote_root, "downloaded.txt"))
 
 
-def download(local_path: str, remote_path: str):
-    dbx = dropbox.Dropbox(
-        oauth2_refresh_token=os.environ["DBX_REFRESH_TOKEN"],
-        oauth2_access_token=os.environ["DBX_ACCESS_TOKEN"],
-        app_key=os.environ["DBX_APP_KEY"],
-        app_secret=os.environ["DBX_APP_SECRET"],
-    )
+def download(dbx: dropbox.Dropbox, local_path: str, remote_path: str):
     metadata, response = dbx.files_download(remote_path)
     with open(local_path, "wb") as f:
         f.write(response.content)
 
 
 if __name__ == "__main__":
-    auth_flow()
+    dbx = auth_flow()
     upload_all(
+        dbx,
         local_root="data/frames",
         remote_root="/MVFdataset/",
         downloaded_path="downloaded.txt",
+        num_threads=16,
     )
-    # download(
-    #    local_path="downloaded.txt",
-    #    remote_path="/MVFdataset/downloaded.txt",
-    # )

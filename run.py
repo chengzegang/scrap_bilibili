@@ -6,7 +6,8 @@ from tqdm import tqdm
 import fcntl
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing as mp
-from upload import auth_flow, upload_file, upload_all
+from upload import auth_flow, upload_file2, upload_all
+from dropbox import Dropbox
 from download import (
     download,
     load_downloaded_bvids,
@@ -20,6 +21,7 @@ from clean import clean
 
 def pipeline(
     bv: str,
+    dbx: Dropbox,
     remote_root: str = "/MVFdataset/",
     downloaded_path: str = "downloaded.txt",
     bbdown_bin: str = "bin/BBDown",
@@ -48,13 +50,14 @@ def pipeline(
             f.write("\n")
             fcntl.flock(f, fcntl.LOCK_UN)
         zip_filepath = zipdir(frame_dir, data_dir)
-        upload_file(
-            zip_filepath, os.path.join(remote_root, os.path.basename(zip_filepath))
+        upload_file2(
+            dbx, zip_filepath, os.path.join(remote_root, os.path.basename(zip_filepath))
         )
         remove_along_till_root(cache_dir, video_path)
         shutil.rmtree(frame_dir)
     if pbar is not None:
         pbar.update()
+    return True
 
 
 def main(
@@ -73,8 +76,8 @@ def main(
         data_dir,
         downloaded_path,
     )
-    auth_flow()
-    upload_all(data_dir, remote_root, downloaded_path)
+    dbx = auth_flow()
+    upload_all(dbx, data_dir, remote_root, downloaded_path)
     os.makedirs(cache_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
     bvs = load_total_bvids(db_path)
@@ -85,6 +88,7 @@ def main(
         pool.map(
             partial(
                 pipeline,
+                dbx=dbx,
                 remote_root=remote_root,
                 downloaded_path=downloaded_path,
                 bbdown_bin=bbdown_bin,
