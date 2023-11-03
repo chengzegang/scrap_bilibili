@@ -44,12 +44,12 @@ def pipeline(
             image_size,
             False,
         )
+        zip_filepath = zipdir(frame_dir, data_dir)
         with open(downloaded_path, "a+") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             f.write(ret)
             f.write("\n")
             fcntl.flock(f, fcntl.LOCK_UN)
-        zip_filepath = zipdir(frame_dir, data_dir)
         upload_file2(
             dbx, zip_filepath, os.path.join(remote_root, os.path.basename(zip_filepath))
         )
