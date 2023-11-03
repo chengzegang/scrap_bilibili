@@ -21,7 +21,7 @@ def auth_flow() -> dropbox.Dropbox:
         )
         return dbx
     auth_flow = dropbox.DropboxOAuth2FlowNoRedirect(
-        os.environ["DBX_APP_KEY"], os.environ["DBX_APP_SECRET"]
+        os.environ["DBX_APP_KEY"], os.environ["DBX_APP_SECRET"], token_access_type="legacy"
     )
     authorize_url = auth_flow.start()
     sys.stdout.write("1. Go to: {}\n".format(authorize_url))
@@ -30,11 +30,12 @@ def auth_flow() -> dropbox.Dropbox:
     auth_code = input("Enter the authorization code here: ").strip()
     try:
         oauth_result = auth_flow.finish(auth_code)
+        print(oauth_result)
         os.environ["DBX_ACCESS_TOKEN"] = oauth_result.access_token
         os.environ["DBX_REFRESH_TOKEN"] = oauth_result.refresh_token
         with open(".env", "a") as f:
             f.write(
-                f"DBX_ACCESS_TOKEN={oauth_result.access_token}\nDBX_REFRESH_TOKEN={oauth_result.refresh_token}"
+                f"\nDBX_ACCESS_TOKEN={oauth_result.access_token}\nDBX_REFRESH_TOKEN={oauth_result.refresh_token}"
             )
     except Exception as e:
         raise Exception("Error: {}".format(e))
@@ -50,7 +51,7 @@ def auth_flow() -> dropbox.Dropbox:
 def upload_file(
     dbx: dropbox.Dropbox, local_path: str, remote_path: str, pbar: tqdm = None
 ):
-    dbx.check_and_refresh_access_token()
+    #dbx.check_and_refresh_access_token()
     dbx.files_upload(
         open(local_path, "rb").read(),
         remote_path,
@@ -80,7 +81,7 @@ def upload_file2(
     chunk_size: int = 4 * 1024 * 1024,
     pbar: tqdm = None,
 ):
-    dbx.check_and_refresh_access_token()
+    #dbx.check_and_refresh_access_token()
     with open(local_path, "rb") as f:
         filesize = os.path.getsize(local_path)
         chunk_size = min(chunk_size, filesize)
@@ -115,7 +116,7 @@ def upload_all(
     downloaded_path: str,
     num_threads=16,
 ):
-    dbx.check_and_refresh_access_token()
+    #dbx.check_and_refresh_access_token()
     downloaded = set(open(downloaded_path, "r").read().splitlines())
     existed = set(
         os.path.splitext(os.path.basename(f))[0] for f in list_exists(dbx, remote_root)
@@ -162,5 +163,5 @@ if __name__ == "__main__":
         local_root="data/frames",
         remote_root="/MVFdataset/",
         downloaded_path="downloaded.txt",
-        num_threads=16,
+        num_threads=1,
     )

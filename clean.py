@@ -11,7 +11,7 @@ def clean(cache_dir: str, data_dir: str, downloaded_path: str):
     for zf in zip_filepaths:
         if os.path.splitext(os.path.basename(zf))[0] not in downloaded:
             print(f"Unfinished: {zf}")
-            # os.remove(zf)
+            os.remove(zf)
 
 
 if __name__ == "__main__":
