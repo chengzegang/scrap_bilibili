@@ -93,7 +93,8 @@ def upload_all(local_root: str, remote_root: str, downloaded_path: str, num_thre
                 )
         for f in as_completed(futures):
             if f.exception() is not None:
-                pbar.write(f.exception())
+                print(f.exception())
+                
         executor.shutdown(wait=True)
         pbar.close()
     # upload_file(downloaded_path, os.path.join(remote_root, "downloaded.txt"))

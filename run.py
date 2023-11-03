@@ -80,7 +80,7 @@ def main(
     bvs = load_total_bvids(db_path)
     downloaded_bvs = load_downloaded_bvids(downloaded_path)
     bvs = set(bvs) - set(downloaded_bvs)
-    pbar = tqdm(total=len(bvs), disable=not verbose)
+    pbar = tqdm(total=len(bvs), disable=not verbose, dynamic_ncols=True)
     with ThreadPoolExecutor(num_threads) as pool:
         pool.map(
             partial(
