@@ -69,7 +69,7 @@ def main(
     data_dir: str = "data/frames",
     image_size: int = 512,
     verbose: bool = True,
-    num_threads: int = 1,
+    num_threads: int = 16,
 ):
     clean(
         cache_dir,
