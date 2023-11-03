@@ -50,6 +50,7 @@ def auth_flow() -> dropbox.Dropbox:
 def upload_file(
     dbx: dropbox.Dropbox, local_path: str, remote_path: str, pbar: tqdm = None
 ):
+    dbx.check_and_refresh_access_token()
     dbx.files_upload(
         open(local_path, "rb").read(),
         remote_path,
@@ -79,6 +80,7 @@ def upload_file2(
     chunk_size: int = 4 * 1024 * 1024,
     pbar: tqdm = None,
 ):
+    dbx.check_and_refresh_access_token()
     with open(local_path, "rb") as f:
         filesize = os.path.getsize(local_path)
         chunk_size = min(chunk_size, filesize)
@@ -105,6 +107,7 @@ def upload_file2(
             pbar.set_description(f"Uploaded: {os.path.basename(local_path)}")
     return True
 
+
 def upload_all(
     dbx: dropbox.Dropbox,
     local_root: str,
@@ -112,6 +115,7 @@ def upload_all(
     downloaded_path: str,
     num_threads=16,
 ):
+    dbx.check_and_refresh_access_token()
     downloaded = set(open(downloaded_path, "r").read().splitlines())
     existed = set(
         os.path.splitext(os.path.basename(f))[0] for f in list_exists(dbx, remote_root)
