@@ -131,7 +131,6 @@ def upload_all(
     existed = set(
         os.path.splitext(os.path.basename(f))[0] for f in list_exists(dbx, remote_root)
     )
-
     conn = duckdb.connect("bilibili.db")
     conn.sql("INSERT INTO collected (bvid) VALUES (?)", params=(list(existed),))
     conn.commit()

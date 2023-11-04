@@ -340,16 +340,21 @@ async def main(
     username = username or "anonymous"
     batch_size = 4
     bvids = []
+    tasks = []
     async for bvid in list_bvids(db_path):
         bvids.append(bvid)
         if len(bvids) == batch_size:
-            await capture_video(
+            coro = capture_video(
                 bvids, db_path, data_dir, interval=interval, image_size=image_size
             )
+            tasks.append(coro)
             bvids = []
-    await capture_video(
-        bvids, db_path, data_dir, interval=interval, image_size=image_size
-    )
+    if len(bvids) > 0:
+        coro = capture_video(
+            bvids, db_path, data_dir, interval=interval, image_size=image_size
+        )
+        tasks.append(coro)
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
