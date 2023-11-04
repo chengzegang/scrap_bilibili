@@ -174,7 +174,6 @@ async def download_videos(
     data_dir: str = "data/MVFdataset/train/",
     **kwargs,
 ) -> bool:
-
     import yt_dlp
 
     URL = "https://www.bilibili.com/video/{bvid}"
@@ -239,8 +238,10 @@ async def cut_videos(data_dir: str, image_size: int, interval: float = 5.0):
 
 
 async def remove_cached_video(bvids: list[str], data_dir: str = "data/MVFdataset/"):
-    for video in glob.iglob(os.path.join(data_dir, "*.mp4")):
-        os.remove(video)
+    for bvid in glob.iglob(bvids):
+        files = glob.glob(os.path.join(data_dir, f"{bvid}.*"))
+        for file in files:
+            await aioos.unlink(file)
 
 
 async def capture_video(
