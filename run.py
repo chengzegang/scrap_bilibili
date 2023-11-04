@@ -17,9 +17,12 @@ from download import (
     remove_along_till_root,
 )
 from clean import clean
+import asyncio
+from aiofiles import os, open as aopen
+from os.path import join, splitext, basename
 
 
-def pipeline(
+async def pipeline(
     bv: str,
     dbx: Dropbox,
     remote_root: str = "/MVFdataset/",
@@ -30,37 +33,45 @@ def pipeline(
     image_size: int = 512,
     pbar: tqdm = None,
 ):
-    ret = download(bv, cache_dir, bbdown_bin)
-    if ret is not None:
-        video_path = (
-            glob.glob(os.path.join(cache_dir, f"{bv}.mp4"))
-            + glob.glob(os.path.join(cache_dir, "**", f"{bv}.mp4"), recursive=True)
-        )[0]
-        frame_dir = os.path.join(data_dir, f"{bv}")
-        os.makedirs(frame_dir, exist_ok=True)
-        video2frames(  # remove the directory
+    ret = await download(bv, cache_dir, bbdown_bin)
+    if ret is None:
+        pbar.write(f"Failed to download {bv}")
+        pbar.update()
+        return False
+    else:
+        pbar.write(f"Downloaded {bv}")
+        video_path = join(cache_dir, f"{bv}.mp4")
+        if not await os.path.exists(video_path):
+            pbar.write(f"Failed to locate {bv}.mp4")
+            pbar.update()
+            return False
+
+        frame_dir = join(data_dir, f"{bv}")
+        await os.makedirs(frame_dir, exist_ok=True)
+        await video2frames(  # remove the directory
             video_path,
             frame_dir,
             image_size,
             False,
         )
-        zip_filepath = zipdir(frame_dir, data_dir)
+        zip_filepath = await zipdir(frame_dir, data_dir)
         with open(downloaded_path, "a+") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             f.write(ret)
             f.write("\n")
             fcntl.flock(f, fcntl.LOCK_UN)
         # upload_file2(
-        #    dbx, zip_filepath, os.path.join(remote_root, os.path.basename(zip_filepath))
+        #    dbx, zip_filepath, join(remote_root, os.path.basename(zip_filepath))
         # )
-        remove_along_till_root(cache_dir, video_path)
+        await os.remove(video_path)
         shutil.rmtree(frame_dir)
+        pbar.write(f"Finished {bv}")
     if pbar is not None:
         pbar.update()
     return True
 
 
-def main(
+async def main(
     remote_root: str = "/MVFdataset/",
     db_path: str = "bilibili.db",
     downloaded_path: str = "downloaded.txt",
@@ -69,40 +80,36 @@ def main(
     data_dir: str = "data/frames",
     image_size: int = 512,
     verbose: bool = True,
-    num_threads: int = 16,
 ):
-    clean(
+    await clean(
         cache_dir,
         data_dir,
         downloaded_path,
     )
     dbx = auth_flow()
     upload_all(dbx, data_dir, remote_root, downloaded_path)
-    os.makedirs(cache_dir, exist_ok=True)
-    os.makedirs(data_dir, exist_ok=True)
+    await os.makedirs(cache_dir, exist_ok=True)
+    await os.makedirs(data_dir, exist_ok=True)
     bvs = load_total_bvids(db_path)
-    downloaded_bvs = load_downloaded_bvids(downloaded_path)
+    downloaded_bvs = await load_downloaded_bvids(downloaded_path)
     bvs = set(bvs) - set(downloaded_bvs)
+    bvs = list(bvs)
     pbar = tqdm(total=len(bvs), disable=not verbose, dynamic_ncols=True)
-    with ThreadPoolExecutor(num_threads) as pool:
-        pool.map(
-            partial(
-                pipeline,
-                dbx=dbx,
-                remote_root=remote_root,
-                downloaded_path=downloaded_path,
-                bbdown_bin=bbdown_bin,
-                cache_dir=cache_dir,
-                data_dir=data_dir,
-                image_size=image_size,
-                pbar=pbar,
-            ),
-            bvs,
-        )
-        pool.shutdown(wait=True)
-    pbar.close()
+    func = partial(
+        pipeline,
+        dbx=dbx,
+        remote_root=remote_root,
+        downloaded_path=downloaded_path,
+        bbdown_bin=bbdown_bin,
+        cache_dir=cache_dir,
+        data_dir=data_dir,
+        image_size=image_size,
+        pbar=pbar,
+    )
+    batch_size = mp.cpu_count() * 2
+    for i in range(0, len(bvs), batch_size):
+        await asyncio.gather(*[func(bv) for bv in bvs[i : i + batch_size]])
 
 
 if __name__ == "__main__":
-    mp.set_start_method("fork")
-    main()
+    asyncio.run(main())

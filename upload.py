@@ -134,7 +134,7 @@ def upload_all(
     )
     with ThreadPoolExecutor(num_threads) as executor:
         files = os.listdir(local_root)
-        pbar = tqdm(total=len(files))
+        pbar = tqdm(total=len(files), leave=False)
         futures = []
         for f in files:
             if f.lower().endswith(".zip"):

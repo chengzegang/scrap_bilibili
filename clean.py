@@ -1,17 +1,27 @@
 import glob
 import os
 import shutil
+from aiofiles import os, open
+from os.path import join, splitext, basename
 
 
-def clean(cache_dir: str, data_dir: str, downloaded_path: str):
-    if os.path.exists(cache_dir):
+async def clean(cache_dir: str, data_dir: str, downloaded_path: str):
+    downloaded = set()
+    async with open(downloaded_path, "r") as f:
+        async for line in f:
+            downloaded.add(line.strip())
+    if await os.path.exists(cache_dir):
         shutil.rmtree(cache_dir)
-    zip_filepaths = glob.glob(os.path.join(data_dir, "*.zip"))
-    downloaded = set(open(downloaded_path, "r").read().splitlines())
-    for zf in zip_filepaths:
-        if os.path.splitext(os.path.basename(zf))[0] not in downloaded:
-            print(f"Unfinished: {zf}")
-            os.remove(zf)
+    for file in await os.listdir(data_dir):
+        path = join(data_dir, file)
+        if await os.path.isfile(path) and path.endswith(".zip"):
+            if splitext(basename(file))[0] not in downloaded:
+                print(f"Unfinished: {file}")
+                await os.remove(path)
+        else:
+            if await os.path.isdir(path):
+                print(f"Unfinished: {path}")
+                shutil.rmtree(path)
 
 
 if __name__ == "__main__":

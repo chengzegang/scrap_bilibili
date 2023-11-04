@@ -1,18 +1,35 @@
-from functools import partial
 import duckdb
 import zipfile
 import os
-import glob
 import cv2
-import numpy as np
 from PIL import Image
 import subprocess
-import shutil
 from tqdm import tqdm
-import fcntl
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-import multiprocessing as mp
-from upload import auth_flow, upload_file, upload_all
+import asyncio
+from functools import wraps
+from aiofiles import os, open
+from os.path import join, basename, commonprefix, dirname
+
+
+async def async_enumerate(aiterable, start=0):
+    """Async version of enumerate
+    :param aiterable: a async iterable (an object implementing the async iterator protocol)
+    :param start: the counter start value
+    :yields: a tuple of the form (counter, value) where counter is the next integer value and value is the next value from the async iterable
+    """
+    n = start
+    async for elem in aiterable:
+        yield n, elem
+        n += 1
+
+
+def afunc(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        coro = asyncio.to_thread(func, *args, **kwargs)
+        return await coro
+
+    return wrapper
 
 
 def load_total_bvids(db_path: str):
@@ -21,58 +38,69 @@ def load_total_bvids(db_path: str):
     return bvs
 
 
-def load_downloaded_bvids(downloaded_path: str):
-    bvs = open(downloaded_path, "r").read().splitlines()
+async def load_downloaded_bvids(downloaded_path: str):
+    bvs = []
+    async with open(downloaded_path, "r") as f:
+        async for line in f:
+            bvs.append(line.strip())
     return bvs
 
 
-def download(bv: str, dst_dir: str, bbdown_bin: str):
-    p = subprocess.run(
-        f'{bbdown_bin} {bv} --work-dir {dst_dir} -F <bvid> --video-only --skip-cover -p 1 -M <bvid>/<bvid> -e "hevc,avc,av1"'.split(),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.STDOUT,
-        timeout=600,
-        check=True,
-    )
-    if p.returncode != 0:
-        return None
+def check_stdout(stdout: bytes):
+    stdout = stdout.decode("utf-8")
+    if "任务完成" in stdout:
+        return True
     else:
+        return False
+
+
+async def download(bv: str, dst_dir: str, bbdown_bin: str):
+    @afunc
+    def run():
+        p = subprocess.run(
+            [
+                bbdown_bin,
+                bv,
+                "--work-dir",
+                dst_dir,
+                "-F",
+                '"<bvid>"',
+                "--video-only",
+                "--skip-cover",
+                "-p",
+                "1",
+                "-M",
+                '"<bvid>"',
+                "-e",
+                "hevc,avc,av1",
+                "-mt",
+                "false",
+            ],
+            bufsize=65536,
+            capture_output=True,
+        )
+        return p
+
+    p = await run()
+    await asyncio.sleep(0.1)
+    if check_stdout(p.stdout):
         return bv
+    else:
+        print(p.stdout.decode("utf-8"))
+        return None
 
 
-def count_total_frames(path: str, yield_freq: float = 0.25):
+@afunc
+def count_total(path: str, interval: float = 5.0):
     vidcap = cv2.VideoCapture(path)
-    fps = int(vidcap.get(cv2.CAP_PROP_FPS))
-    org_total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
-    interval = max(1, fps / yield_freq)
-    total_frames = int(org_total_frames / interval)
+    fps = vidcap.get(cv2.CAP_PROP_FPS)
+    totalNoFrames = vidcap.get(cv2.CAP_PROP_FRAME_COUNT)
+    durationInSeconds = totalNoFrames // fps
+    total_frames = int(durationInSeconds / interval)
     return total_frames
 
 
-def zipdir(root: str, dst_dir: str):
-    name = os.path.basename(root)
-    dst_zip_path = os.path.join(dst_dir, name + ".zip")
-    with zipfile.ZipFile(dst_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for src_name in os.listdir(root):
-            src_file = os.path.join(root, src_name)
-            zf.write(src_file, src_name)
-    return dst_zip_path
-
-
-def remove_along_till_root(root: str, path: str):
-    assert os.path.commonprefix([root, path]) == root
-    while path != root:
-        try:
-            if os.path.isfile(path):
-                os.remove(path)
-            else:
-                os.rmdir(path)
-        except Exception as e:
-            print(f"Exception from remove {path}: {e}")
-        path = os.path.dirname(path)
-
-
-
+@afunc
 def center_crop(image):
     height, width = image.shape[:2]
     center_width = width // 2
@@ -85,47 +113,59 @@ def center_crop(image):
     ]
 
 
-def frames(path: str, yield_freq: float = 0.25, image_size: int = 512):
+async def zipdir(root: str, dst_dir: str):
+    name = basename(root)
+    dst_zip_path = join(dst_dir, name + ".zip")
+    with zipfile.ZipFile(dst_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for src_name in await os.listdir(root):
+            src_file = join(root, src_name)
+            zf.write(src_file, src_name)
+    return dst_zip_path
+
+
+async def remove_along_till_root(root: str, path: str):
+    assert commonprefix([root, path]) == root
+    while path != root:
+        try:
+            if await os.path.isfile(path):
+                await os.remove(path)
+            else:
+                await os.rmdir(path)
+        except Exception as e:
+            print(f"Exception from remove {path}: {e}")
+        path = dirname(path)
+
+
+async def frames(path: str, total: int, interval: float = 5.0, image_size: int = 512):
+    if not await os.path.exists(path):
+        raise FileNotFoundError(path)
     vidcap = cv2.VideoCapture(path)
-    fps = int(vidcap.get(cv2.CAP_PROP_FPS))
-    interval = int(fps / yield_freq)
-    count = 0
-    while True:
+    for i in range(total):
+        milsec = i * interval * 1000
+        vidcap.set(cv2.CAP_PROP_POS_MSEC, milsec)
         success, image = vidcap.read()
         if not success:
             break
-        if count % interval == 0:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            image = center_crop(image)
-            image = cv2.resize(
-                image, (image_size, image_size), interpolation=cv2.INTER_LANCZOS4
-            )
-            yield image
-        count += 1
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = await center_crop(image)
+        image = cv2.resize(
+            image, (image_size, image_size), interpolation=cv2.INTER_LANCZOS4
+        )
+        yield image
 
 
-def video2frames(path: str, dst_dir: str, image_size: int = 512, verbose: bool = True):
-    yield_freq = 0.25
-    num_frames = count_total_frames(path, yield_freq)
-    if num_frames < 8:
+async def video2frames(
+    path: str,
+    dst_dir: str,
+    image_size: int = 512,
+    verbose: bool = True,
+    interval: float = 5.0,
+):
+    total = await count_total(path, interval)
+    if total < 8:
         return
-    pbar = tqdm(total=num_frames, disable=not verbose)
-    for idx, frame in enumerate(frames(path, yield_freq, image_size)):
+    pbar = tqdm(total=total, disable=not verbose)
+    async for idx, frame in async_enumerate(frames(path, total, interval, image_size)):
         frame = Image.fromarray(frame)
-        frame.save(os.path.join(dst_dir, f"{idx:06d}.jpg"))
+        frame.save(join(dst_dir, f"{idx:06d}.jpg"))
         pbar.update()
-
-
-
-def remove_along_till_root(root: str, path: str):
-    assert os.path.commonprefix([root, path]) == root
-    while path != root:
-        try:
-            if os.path.isfile(path):
-                os.remove(path)
-            else:
-                os.rmdir(path)
-        except Exception as e:
-            print(f"Exception from remove {path}: {e}")
-        path = os.path.dirname(path)
-
