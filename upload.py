@@ -156,7 +156,7 @@ def upload_all(
                     )
             else:
                 pbar.set_description(f"{f} not a zip file.")
-            pbar.update()
+                pbar.update()
         for f in as_completed(futures):
             if f.exception() is not None:
                 pass
