@@ -1,22 +1,17 @@
 import asyncio
 import datetime
 import httpx
-import ffmpeg
 from PIL import Image
 import zipfile
 import io
-import lz4.block
-import json
-import sys
+
 from aiofiles import os as aioos, open as aioopen
 import os
 import duckdb
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
+
+import glob
 import cv2
-from cryptography.hazmat.primitives import serialization
+
 
 MIXIN_KEY_TABLE = [
     46,
@@ -177,10 +172,9 @@ async def center_crop_resize(frame: Image.Image, size: int):
 async def download_videos(
     bvids: list[str],
     data_dir: str = "data/MVFdataset/train/",
-    interval: float = 5.0,
     **kwargs,
-) -> list[bytes]:
-    import json
+) -> bool:
+
     import yt_dlp
 
     URL = "https://www.bilibili.com/video/{bvid}"
@@ -191,7 +185,9 @@ async def download_videos(
         ydl_opts = {
             "format": "bv[ext=mp4][height<=480]",
             "outtmpl": f"{data_dir}/%(webpage_url_basename)s.%(ext)s",
-            "concurrent_fragments": 16,
+            "concurrent_fragment_downloads": 16,
+            "noplaylist": True,
+            "format_sort": {"vcodec": "h265,h264,hevc,av01"},
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download(urls)
@@ -207,6 +203,8 @@ async def cut_video(video_path: str, image_size: int, interval: float = 5.0):
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     frame_stride = int(interval * fps)
+    if frame_stride == 0:
+        return []
     frames = []
     for i in range(0, frame_count, frame_stride):
         cap.set(cv2.CAP_PROP_POS_FRAMES, i)
@@ -227,6 +225,8 @@ async def cut_videos(data_dir: str, image_size: int, interval: float = 5.0):
         bv = os.path.splitext(video_name)[0]
         video_path = os.path.join(data_dir, video_name)
         video_frames = await cut_video(video_path, image_size, interval)
+        if len(video_frames) == 0:
+            continue
         zf_path = os.path.join(data_dir, f"{bv}.zip")
         with zipfile.ZipFile(zf_path, "w") as zf:
             for i in range(len(video_frames)):
@@ -239,22 +239,24 @@ async def cut_videos(data_dir: str, image_size: int, interval: float = 5.0):
 
 
 async def remove_cached_video(bvids: list[str], data_dir: str = "data/MVFdataset/"):
-    for bvid in bvids:
-        os.remove(os.path.join(data_dir, bvid + ".mp4"))
+    for video in glob.iglob(os.path.join(data_dir, "*.mp4")):
+        os.remove(video)
 
 
 async def capture_video(
     bvids: list[str],
+    db_path: str,
     data_dir: str = "data/MVFdataset/train/",
     interval: float = 5.0,
     image_size: int = 512,
     **kwargs,
 ):
     await aioos.makedirs(data_dir, exist_ok=True)
-    ready = await download_videos(bvids, data_dir=data_dir, interval=interval)
+    ready = await download_videos(bvids, data_dir=data_dir)
     if ready:
         await cut_videos(data_dir=data_dir, image_size=image_size, interval=interval)
-        await remove_cached_video(bvids, data_dir=data_dir)
+    await remove_cached_video(bvids, data_dir=data_dir)
+    await record_done(db_path, bvids)
 
 
 async def create_bilibili_table(db_path: str):
@@ -297,26 +299,13 @@ async def list_bvids(db_path: str):
 
 async def record_done(
     db_path: str,
-    bvid: str,
-    cid: int,
-    signature: str,
-    length: int,
-    width: int,
-    height: int,
+    bvids: list[str],
     **kwargs,
 ):
     conn = duckdb.connect(db_path)
     conn.sql(
-        f"INSERT INTO collected VALUES (?, ?, ?, ?, ?, ?, ?)",
-        params=(
-            bvid,
-            cid,
-            signature,
-            datetime.datetime.now(),
-            length,
-            width,
-            height,
-        ),
+        f"INSERT INTO collected (bvid) VALUES (?) ON CONFLICT(bvid) DO NOTHING",
+        params=(bvids,),
     )
     conn.commit()
     conn.close()
@@ -334,7 +323,6 @@ async def rename_column(db_path: str):
 
 
 async def setup(db_path: str, data_dir: str):
-    await rename_column(db_path)
     await create_bilibili_table(db_path)
     await create_done_table(db_path)
     await aioos.makedirs(data_dir, exist_ok=True)
@@ -356,10 +344,12 @@ async def main(
         bvids.append(bvid)
         if len(bvids) == batch_size:
             await capture_video(
-                bvids, data_dir, interval=interval, image_size=image_size
+                bvids, db_path, data_dir, interval=interval, image_size=image_size
             )
             bvids = []
-    await capture_video(bvids, data_dir, interval=interval, image_size=image_size)
+    await capture_video(
+        bvids, db_path, data_dir, interval=interval, image_size=image_size
+    )
 
 
 if __name__ == "__main__":
